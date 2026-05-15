@@ -12,206 +12,121 @@ namespace PatternQuest
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new GameForm());
+            Application.Run(new ShooterForm());
         }
     }
 
-    public sealed class GameForm : Form, IGameObserver
+    public sealed class ShooterForm : Form, IGameObserver
     {
-        private readonly ListBox _playerList = new ListBox();
-        private readonly ListBox _enemyList = new ListBox();
+        private readonly Timer _timer = new Timer();
+        private readonly HashSet<Keys> _keys = new HashSet<Keys>();
+        private readonly Label _status = new Label();
         private readonly TextBox _journal = new TextBox();
-        private readonly NumericUpDown _attackerIndex = new NumericUpDown();
-        private readonly NumericUpDown _enemyIndex = new NumericUpDown();
-        private readonly NumericUpDown _healIndex = new NumericUpDown();
-        private readonly Button _scoutButton = new Button();
-        private readonly Button _attackButton = new Button();
-        private readonly Button _healButton = new Button();
-        private readonly Button _endButton = new Button();
-        private readonly Label _mapLabel = new Label();
+        private readonly GameWorld _world;
+        private readonly CommandInterpreter _interpreter = new CommandInterpreter();
 
-        private readonly CommandParser _parser = new CommandParser();
-        private readonly GameContext _context;
-
-        public GameForm()
+        public ShooterForm()
         {
-            Text = "Pattern Quest - лабораторные 7-8";
-            ClientSize = new Size(820, 520);
+            Text = "Pattern Quest Shooter - лабораторные 7-8";
+            ClientSize = new Size(900, 620);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
-            Font = new Font("Segoe UI", 9F);
+            DoubleBuffered = true;
+            KeyPreview = true;
+            BackColor = Color.FromArgb(18, 24, 33);
 
             EventBus events = new EventBus();
             events.Attach(this);
-            events.Attach(new ScoreBoard());
-            Logger.Instance.MessageWritten += AppendLog;
+            events.Attach(new ScoreObserver());
+            Logger.Instance.MessageWritten += AddLog;
 
-            IFactionFactory playerFactory = new OrderFactory();
-            IFactionFactory enemyFactory = new RaidersFactory();
-            ArmyDirector director = new ArmyDirector();
-            Squad player = director.CreateBalancedArmy(playerFactory);
-            Squad enemy = director.CreateBalancedArmy(enemyFactory);
-            IMapImage map = playerFactory.CreateMap();
+            IFactionFactory factory = new SpaceFactionFactory();
+            WaveDirector director = new WaveDirector();
+            Fleet fleet = director.CreateFirstWave(factory);
+            _world = new GameWorld(factory.CreatePlayer(), fleet, factory.CreateBackground(), events);
 
-            _context = new GameContext(player, enemy, map, events);
             BuildUi();
-            Logger.Instance.Write("Игра запущена. Использованы Singleton, Abstract Factory, Builder, Composite, Proxy, Interpreter, Observer.");
-            RefreshArmies();
+
+            _timer.Interval = 25;
+            _timer.Tick += delegate
+            {
+                _interpreter.Interpret(_keys, _world);
+                _world.Update();
+                RefreshStatus();
+                Invalidate();
+            };
+            _timer.Start();
+
+            KeyDown += OnKeyDown;
+            KeyUp += OnKeyUp;
+            Logger.Instance.Write("Стрелялка запущена. Управление: A/D или стрелки, Space - выстрел, R - рестарт.");
         }
 
         public void Update(GameEvent gameEvent)
         {
-            AppendLog(gameEvent.Message);
-            RefreshArmies();
+            AddLog(gameEvent.Message);
+            RefreshStatus();
+        }
 
-            if (_context.BattleEnded)
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            _world.Draw(e.Graphics);
+
+            using (Brush textBrush = new SolidBrush(Color.White))
             {
-                _attackButton.Enabled = false;
-                _healButton.Enabled = false;
-                _scoutButton.Enabled = false;
-                _endButton.Enabled = false;
+                e.Graphics.DrawString("A/D или ←/→ - движение, Space - стрелять, R - рестарт",
+                    Font, textBrush, 18, 46);
             }
         }
 
         private void BuildUi()
         {
-            Label title = new Label();
-            title.Text = "Pattern Quest";
-            title.Font = new Font(Font.FontFamily, 16F, FontStyle.Bold);
-            title.Location = new Point(16, 12);
-            title.Size = new Size(260, 32);
-            Controls.Add(title);
+            _status.Location = new Point(16, 12);
+            _status.Size = new Size(860, 26);
+            _status.ForeColor = Color.White;
+            _status.Font = new Font("Segoe UI", 11F, FontStyle.Bold);
+            Controls.Add(_status);
 
-            _mapLabel.Text = "Карта: область скрыта";
-            _mapLabel.BorderStyle = BorderStyle.FixedSingle;
-            _mapLabel.BackColor = Color.FromArgb(235, 239, 244);
-            _mapLabel.Location = new Point(300, 14);
-            _mapLabel.Size = new Size(500, 30);
-            _mapLabel.TextAlign = ContentAlignment.MiddleCenter;
-            Controls.Add(_mapLabel);
-
-            Label playerTitle = new Label();
-            playerTitle.Text = "Орден Севера";
-            playerTitle.Location = new Point(16, 62);
-            playerTitle.Size = new Size(360, 22);
-            Controls.Add(playerTitle);
-
-            Label enemyTitle = new Label();
-            enemyTitle.Text = "Налетчики Пустоши";
-            enemyTitle.Location = new Point(416, 62);
-            enemyTitle.Size = new Size(360, 22);
-            Controls.Add(enemyTitle);
-
-            _playerList.Location = new Point(16, 86);
-            _playerList.Size = new Size(380, 160);
-            Controls.Add(_playerList);
-
-            _enemyList.Location = new Point(416, 86);
-            _enemyList.Size = new Size(380, 160);
-            Controls.Add(_enemyList);
-
-            _scoutButton.Text = "Разведка";
-            _scoutButton.Location = new Point(16, 266);
-            _scoutButton.Size = new Size(110, 32);
-            _scoutButton.Click += delegate { Execute("scout"); };
-            Controls.Add(_scoutButton);
-
-            Label attackLabel = new Label();
-            attackLabel.Text = "Атака: свой";
-            attackLabel.Location = new Point(150, 272);
-            attackLabel.Size = new Size(78, 24);
-            Controls.Add(attackLabel);
-
-            _attackerIndex.Location = new Point(230, 270);
-            _attackerIndex.Size = new Size(48, 24);
-            _attackerIndex.Minimum = 0;
-            _attackerIndex.Maximum = 4;
-            Controls.Add(_attackerIndex);
-
-            Label targetLabel = new Label();
-            targetLabel.Text = "враг";
-            targetLabel.Location = new Point(288, 272);
-            targetLabel.Size = new Size(40, 24);
-            Controls.Add(targetLabel);
-
-            _enemyIndex.Location = new Point(330, 270);
-            _enemyIndex.Size = new Size(48, 24);
-            _enemyIndex.Minimum = 0;
-            _enemyIndex.Maximum = 4;
-            Controls.Add(_enemyIndex);
-
-            _attackButton.Text = "Атаковать";
-            _attackButton.Location = new Point(390, 266);
-            _attackButton.Size = new Size(110, 32);
-            _attackButton.Click += delegate { Execute("attack " + _attackerIndex.Value + " " + _enemyIndex.Value); };
-            Controls.Add(_attackButton);
-
-            Label healLabel = new Label();
-            healLabel.Text = "Лечение: свой";
-            healLabel.Location = new Point(524, 272);
-            healLabel.Size = new Size(92, 24);
-            Controls.Add(healLabel);
-
-            _healIndex.Location = new Point(620, 270);
-            _healIndex.Size = new Size(48, 24);
-            _healIndex.Minimum = 0;
-            _healIndex.Maximum = 4;
-            Controls.Add(_healIndex);
-
-            _healButton.Text = "Лечить";
-            _healButton.Location = new Point(686, 266);
-            _healButton.Size = new Size(110, 32);
-            _healButton.Click += delegate { Execute("heal " + _healIndex.Value); };
-            Controls.Add(_healButton);
-
-            _journal.Location = new Point(16, 320);
-            _journal.Size = new Size(780, 150);
+            _journal.Location = new Point(16, 500);
+            _journal.Size = new Size(868, 104);
             _journal.Multiline = true;
-            _journal.ScrollBars = ScrollBars.Vertical;
             _journal.ReadOnly = true;
+            _journal.ScrollBars = ScrollBars.Vertical;
+            _journal.BackColor = Color.FromArgb(10, 14, 20);
+            _journal.ForeColor = Color.FromArgb(220, 235, 255);
             Controls.Add(_journal);
 
-            _endButton.Text = "Завершить бой";
-            _endButton.Location = new Point(650, 480);
-            _endButton.Size = new Size(146, 30);
-            _endButton.Click += delegate { Execute("end"); };
-            Controls.Add(_endButton);
+            RefreshStatus();
         }
 
-        private void Execute(string command)
+        private void OnKeyDown(object sender, KeyEventArgs e)
         {
-            AppendLog("> " + command);
-            _parser.Parse(command).Interpret(_context);
-        }
-
-        private void RefreshArmies()
-        {
-            FillArmyList(_playerList, _context.PlayerArmy);
-            FillArmyList(_enemyList, _context.EnemyArmy);
-            _mapLabel.Text = _context.MapDescription;
-        }
-
-        private static void FillArmyList(ListBox listBox, Squad army)
-        {
-            listBox.Items.Clear();
-            List<Unit> units = army.Units();
-            listBox.Items.Add(army.Name + " | сила: " + army.Power);
-            for (int i = 0; i < units.Count; i++)
+            _keys.Add(e.KeyCode);
+            if (e.KeyCode == Keys.R)
             {
-                Unit unit = units[i];
-                string status = unit.IsAlive ? "жив" : "выбыл";
-                listBox.Items.Add(i + ". " + unit.Name + " | HP " + unit.Health + " | ATK " + unit.Attack + " | " + status);
+                _world.Restart();
             }
         }
 
-        private void AppendLog(string message)
+        private void OnKeyUp(object sender, KeyEventArgs e)
+        {
+            _keys.Remove(e.KeyCode);
+        }
+
+        private void RefreshStatus()
+        {
+            _status.Text = _world.StatusText;
+        }
+
+        private void AddLog(string message)
         {
             _journal.AppendText(message + Environment.NewLine);
         }
     }
 
-    // Singleton: единый журнал игры.
+    // Singleton: единый игровой лог.
     public sealed class Logger
     {
         private static readonly Logger _instance = new Logger();
@@ -234,7 +149,7 @@ namespace PatternQuest
         }
     }
 
-    // Observer: подписчики получают игровые события.
+    // Observer: окно и счетчик получают события мира.
     public interface IGameObserver
     {
         void Update(GameEvent gameEvent);
@@ -270,169 +185,121 @@ namespace PatternQuest
         }
     }
 
-    public sealed class ScoreBoard : IGameObserver
+    public sealed class ScoreObserver : IGameObserver
     {
-        private int _attacks;
-        private int _heals;
+        private int _hits;
 
         public void Update(GameEvent gameEvent)
         {
-            if (gameEvent.Type == "attack")
+            if (gameEvent.Type == "hit")
             {
-                _attacks++;
+                _hits++;
+                Logger.Instance.Write("Попаданий за игру: " + _hits);
             }
-            if (gameEvent.Type == "heal")
+            if (gameEvent.Type == "restart")
             {
-                _heals++;
+                _hits = 0;
             }
-
-            Logger.Instance.Write("Статистика: атак " + _attacks + ", лечений " + _heals);
         }
     }
 
-    // Abstract Factory: фракция создает совместимое семейство объектов.
+    // Abstract Factory: создает семейство объектов одной темы.
     public interface IFactionFactory
     {
-        string FactionName { get; }
-        Unit CreateInfantry();
-        Unit CreateArcher();
-        Unit CreateSupport();
-        IMapImage CreateMap();
+        PlayerShip CreatePlayer();
+        EnemyShip CreateScout(int x, int y);
+        EnemyShip CreateRaider(int x, int y);
+        IBackground CreateBackground();
     }
 
-    public sealed class OrderFactory : IFactionFactory
+    public sealed class SpaceFactionFactory : IFactionFactory
     {
-        public string FactionName { get { return "Орден Севера"; } }
-
-        public Unit CreateInfantry()
+        public PlayerShip CreatePlayer()
         {
-            return new Unit("Страж", 34, 8, 0);
+            return new PlayerShip(420, 440);
         }
 
-        public Unit CreateArcher()
+        public EnemyShip CreateScout(int x, int y)
         {
-            return new Unit("Арбалетчик", 24, 11, 0);
+            return new EnemyShip("Разведчик", x, y, 30, 2, 10, Color.FromArgb(255, 195, 85));
         }
 
-        public Unit CreateSupport()
+        public EnemyShip CreateRaider(int x, int y)
         {
-            return new Unit("Целитель", 22, 4, 12);
+            return new EnemyShip("Рейдер", x, y, 44, 1, 20, Color.FromArgb(255, 95, 110));
         }
 
-        public IMapImage CreateMap()
+        public IBackground CreateBackground()
         {
-            return new MapProxy("snow-pass.map");
+            return new BackgroundProxy();
         }
     }
 
-    public sealed class RaidersFactory : IFactionFactory
+    // Builder: собирает волну врагов.
+    public sealed class WaveBuilder
     {
-        public string FactionName { get { return "Налетчики Пустоши"; } }
+        private readonly IFactionFactory _factory;
+        private readonly Fleet _fleet = new Fleet("Вражеская волна");
 
-        public Unit CreateInfantry()
+        public WaveBuilder(IFactionFactory factory)
         {
-            return new Unit("Берсерк", 30, 10, 0);
+            _factory = factory;
         }
 
-        public Unit CreateArcher()
+        public WaveBuilder AddScoutLine()
         {
-            return new Unit("Метатель", 22, 9, 0);
+            for (int i = 0; i < 6; i++)
+            {
+                _fleet.Add(_factory.CreateScout(90 + i * 115, 95));
+            }
+            return this;
         }
 
-        public Unit CreateSupport()
+        public WaveBuilder AddRaiderLine()
         {
-            return new Unit("Шаман", 20, 5, 9);
+            for (int i = 0; i < 4; i++)
+            {
+                _fleet.Add(_factory.CreateRaider(150 + i * 145, 155));
+            }
+            return this;
         }
 
-        public IMapImage CreateMap()
+        public Fleet Build()
         {
-            return new MapProxy("dry-canyon.map");
+            return _fleet;
         }
     }
 
-    // Composite: Unit и Squad имеют общий интерфейс.
-    public interface IArmyComponent
+    public sealed class WaveDirector
     {
-        string Name { get; }
-        int Power { get; }
+        public Fleet CreateFirstWave(IFactionFactory factory)
+        {
+            return new WaveBuilder(factory)
+                .AddScoutLine()
+                .AddRaiderLine()
+                .Build();
+        }
+    }
+
+    // Composite: отдельный враг и флот имеют общий интерфейс.
+    public interface IEnemyComponent
+    {
         bool IsAlive { get; }
+        void Update();
+        void Draw(Graphics graphics);
+        void Collect(List<EnemyShip> enemies);
     }
 
-    public sealed class Unit : IArmyComponent
+    public sealed class Fleet : IEnemyComponent
     {
-        private readonly int _maxHealth;
+        private readonly List<IEnemyComponent> _children = new List<IEnemyComponent>();
 
-        public Unit(string name, int health, int attack, int healing)
-        {
-            Name = name;
-            _maxHealth = health;
-            Health = health;
-            Attack = attack;
-            Healing = healing;
-        }
-
-        public string Name { get; private set; }
-        public int Health { get; private set; }
-        public int Attack { get; private set; }
-        public int Healing { get; private set; }
-
-        public int Power
-        {
-            get { return IsAlive ? Attack + Health / 4 + Healing / 2 : 0; }
-        }
-
-        public bool IsAlive
-        {
-            get { return Health > 0; }
-        }
-
-        public void TakeDamage(int damage)
-        {
-            Health -= damage;
-            if (Health < 0)
-            {
-                Health = 0;
-            }
-        }
-
-        public void Heal(Unit target)
-        {
-            if (!IsAlive || Healing <= 0)
-            {
-                return;
-            }
-
-            target.Health += Healing;
-            if (target.Health > target._maxHealth)
-            {
-                target.Health = target._maxHealth;
-            }
-        }
-    }
-
-    public sealed class Squad : IArmyComponent
-    {
-        private readonly List<IArmyComponent> _children = new List<IArmyComponent>();
-
-        public Squad(string name)
+        public Fleet(string name)
         {
             Name = name;
         }
 
         public string Name { get; private set; }
-
-        public int Power
-        {
-            get
-            {
-                int power = 0;
-                for (int i = 0; i < _children.Count; i++)
-                {
-                    power += _children[i].Power;
-                }
-                return power;
-            }
-        }
 
         public bool IsAlive
         {
@@ -449,383 +316,475 @@ namespace PatternQuest
             }
         }
 
-        public void Add(IArmyComponent component)
+        public void Add(IEnemyComponent component)
         {
             _children.Add(component);
         }
 
-        public List<Unit> Units()
+        public void Update()
         {
-            List<Unit> units = new List<Unit>();
-            CollectUnits(this, units);
-            return units;
+            for (int i = 0; i < _children.Count; i++)
+            {
+                _children[i].Update();
+            }
         }
 
-        private static void CollectUnits(IArmyComponent component, List<Unit> units)
+        public void Draw(Graphics graphics)
         {
-            Unit unit = component as Unit;
-            if (unit != null)
+            for (int i = 0; i < _children.Count; i++)
             {
-                units.Add(unit);
-                return;
+                _children[i].Draw(graphics);
             }
+        }
 
-            Squad squad = component as Squad;
-            if (squad == null)
+        public void Collect(List<EnemyShip> enemies)
+        {
+            for (int i = 0; i < _children.Count; i++)
             {
-                return;
-            }
-
-            for (int i = 0; i < squad._children.Count; i++)
-            {
-                CollectUnits(squad._children[i], units);
+                _children[i].Collect(enemies);
             }
         }
     }
 
-    // Builder: управляемая сборка армии.
-    public sealed class ArmyBuilder
+    public sealed class EnemyShip : IEnemyComponent
     {
-        private readonly IFactionFactory _factory;
-        private readonly Squad _army;
+        private int _direction = 1;
+        private readonly Color _color;
 
-        public ArmyBuilder(IFactionFactory factory)
+        public EnemyShip(string name, int x, int y, int size, int speed, int score, Color color)
         {
-            _factory = factory;
-            _army = new Squad(factory.FactionName);
+            Name = name;
+            Bounds = new Rectangle(x, y, size, size);
+            Speed = speed;
+            Score = score;
+            _color = color;
+            IsAlive = true;
         }
 
-        public ArmyBuilder AddVanguard()
+        public string Name { get; private set; }
+        public Rectangle Bounds { get; private set; }
+        public int Speed { get; private set; }
+        public int Score { get; private set; }
+        public bool IsAlive { get; private set; }
+
+        public void Destroy()
         {
-            Squad squad = new Squad("Авангард");
-            squad.Add(_factory.CreateInfantry());
-            squad.Add(_factory.CreateInfantry());
-            _army.Add(squad);
-            return this;
+            IsAlive = false;
         }
 
-        public ArmyBuilder AddRangeLine()
+        public void Update()
         {
-            Squad squad = new Squad("Дальний ряд");
-            squad.Add(_factory.CreateArcher());
-            squad.Add(_factory.CreateArcher());
-            _army.Add(squad);
-            return this;
-        }
-
-        public ArmyBuilder AddSupport()
-        {
-            Squad squad = new Squad("Поддержка");
-            squad.Add(_factory.CreateSupport());
-            _army.Add(squad);
-            return this;
-        }
-
-        public Squad Build()
-        {
-            return _army;
-        }
-    }
-
-    public sealed class ArmyDirector
-    {
-        public Squad CreateBalancedArmy(IFactionFactory factory)
-        {
-            return new ArmyBuilder(factory)
-                .AddVanguard()
-                .AddRangeLine()
-                .AddSupport()
-                .Build();
-        }
-    }
-
-    // Proxy: настоящая карта загружается только после разведки.
-    public interface IMapImage
-    {
-        string Description { get; }
-        void Reveal();
-    }
-
-    public sealed class RealMapImage : IMapImage
-    {
-        private readonly string _fileName;
-
-        public RealMapImage(string fileName)
-        {
-            _fileName = fileName;
-            Logger.Instance.Write("Загрузка реальной карты " + fileName);
-        }
-
-        public string Description
-        {
-            get { return "Карта: открыта (" + _fileName + ")"; }
-        }
-
-        public void Reveal() { }
-    }
-
-    public sealed class MapProxy : IMapImage
-    {
-        private readonly string _fileName;
-        private RealMapImage _realMap;
-
-        public MapProxy(string fileName)
-        {
-            _fileName = fileName;
-        }
-
-        public string Description
-        {
-            get { return _realMap == null ? "Карта: скрытая область (" + _fileName + ")" : _realMap.Description; }
-        }
-
-        public void Reveal()
-        {
-            if (_realMap == null)
-            {
-                _realMap = new RealMapImage(_fileName);
-            }
-            _realMap.Reveal();
-        }
-    }
-
-    // Interpreter: мини-язык команд игрока.
-    public interface ICommandExpression
-    {
-        bool Interpret(GameContext context);
-    }
-
-    public sealed class AttackExpression : ICommandExpression
-    {
-        private readonly int _attackerIndex;
-        private readonly int _targetIndex;
-
-        public AttackExpression(int attackerIndex, int targetIndex)
-        {
-            _attackerIndex = attackerIndex;
-            _targetIndex = targetIndex;
-        }
-
-        public bool Interpret(GameContext context)
-        {
-            context.Attack(_attackerIndex, _targetIndex);
-            return true;
-        }
-    }
-
-    public sealed class HealExpression : ICommandExpression
-    {
-        private readonly int _targetIndex;
-
-        public HealExpression(int targetIndex)
-        {
-            _targetIndex = targetIndex;
-        }
-
-        public bool Interpret(GameContext context)
-        {
-            context.Heal(_targetIndex);
-            return true;
-        }
-    }
-
-    public sealed class ScoutExpression : ICommandExpression
-    {
-        public bool Interpret(GameContext context)
-        {
-            context.Scout();
-            return true;
-        }
-    }
-
-    public sealed class EndExpression : ICommandExpression
-    {
-        public bool Interpret(GameContext context)
-        {
-            context.EndBattle();
-            return false;
-        }
-    }
-
-    public sealed class InvalidExpression : ICommandExpression
-    {
-        private readonly string _command;
-
-        public InvalidExpression(string command)
-        {
-            _command = command;
-        }
-
-        public bool Interpret(GameContext context)
-        {
-            context.Events.Notify(new GameEvent("error", "Команда не распознана: " + _command));
-            return true;
-        }
-    }
-
-    public sealed class CommandParser
-    {
-        public ICommandExpression Parse(string line)
-        {
-            string[] parts = line.Trim().Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-            int first;
-            int second;
-
-            if (parts.Length == 1 && parts[0] == "scout")
-            {
-                return new ScoutExpression();
-            }
-            if (parts.Length == 1 && parts[0] == "end")
-            {
-                return new EndExpression();
-            }
-            if (parts.Length == 2 && parts[0] == "heal" && int.TryParse(parts[1], out first))
-            {
-                return new HealExpression(first);
-            }
-            if (parts.Length == 3 && parts[0] == "attack" &&
-                int.TryParse(parts[1], out first) &&
-                int.TryParse(parts[2], out second))
-            {
-                return new AttackExpression(first, second);
-            }
-
-            return new InvalidExpression(line);
-        }
-    }
-
-    public sealed class GameContext
-    {
-        private readonly IMapImage _map;
-
-        public GameContext(Squad playerArmy, Squad enemyArmy, IMapImage map, EventBus events)
-        {
-            PlayerArmy = playerArmy;
-            EnemyArmy = enemyArmy;
-            _map = map;
-            Events = events;
-        }
-
-        public Squad PlayerArmy { get; private set; }
-        public Squad EnemyArmy { get; private set; }
-        public EventBus Events { get; private set; }
-        public bool BattleEnded { get; private set; }
-
-        public string MapDescription
-        {
-            get { return _map.Description; }
-        }
-
-        public void Scout()
-        {
-            _map.Reveal();
-            Events.Notify(new GameEvent("scout", "Разведка открыла карту и позиции противника."));
-        }
-
-        public void Attack(int attackerIndex, int targetIndex)
-        {
-            List<Unit> attackers = PlayerArmy.Units();
-            List<Unit> targets = EnemyArmy.Units();
-            if (!CheckIndex(attackers, attackerIndex, "атакующего") ||
-                !CheckIndex(targets, targetIndex, "цели"))
+            if (!IsAlive)
             {
                 return;
             }
 
-            Unit attacker = attackers[attackerIndex];
-            Unit target = targets[targetIndex];
-            if (!attacker.IsAlive)
+            Rectangle next = Bounds;
+            next.X += Speed * _direction;
+            if (next.Left < 18 || next.Right > 882)
             {
-                Events.Notify(new GameEvent("error", attacker.Name + " не может атаковать, потому что выбыл из боя."));
-                return;
+                _direction *= -1;
+                next.X += Speed * _direction;
+                next.Y += 20;
             }
-
-            target.TakeDamage(attacker.Attack);
-            Events.Notify(new GameEvent("attack", attacker.Name + " атакует " + target.Name + " на " + attacker.Attack + " урона."));
-            EnemyTurn();
-            CheckVictory();
+            Bounds = next;
         }
 
-        public void Heal(int targetIndex)
+        public void Draw(Graphics graphics)
         {
-            List<Unit> units = PlayerArmy.Units();
-            if (!CheckIndex(units, targetIndex, "союзника"))
+            if (!IsAlive)
             {
                 return;
             }
 
-            Unit healer = null;
-            for (int i = 0; i < units.Count; i++)
+            using (Brush brush = new SolidBrush(_color))
             {
-                if (units[i].Healing > 0 && units[i].IsAlive)
+                Point[] ship =
                 {
-                    healer = units[i];
-                    break;
+                    new Point(Bounds.Left + Bounds.Width / 2, Bounds.Bottom),
+                    new Point(Bounds.Left, Bounds.Top),
+                    new Point(Bounds.Right, Bounds.Top)
+                };
+                graphics.FillPolygon(brush, ship);
+            }
+        }
+
+        public void Collect(List<EnemyShip> enemies)
+        {
+            if (IsAlive)
+            {
+                enemies.Add(this);
+            }
+        }
+    }
+
+    // Proxy: фон "загружается" при первом рисовании, а не при старте формы.
+    public interface IBackground
+    {
+        void Draw(Graphics graphics, Rectangle area);
+    }
+
+    public sealed class RealBackground : IBackground
+    {
+        private readonly List<Point> _stars = new List<Point>();
+
+        public RealBackground()
+        {
+            Random random = new Random(12);
+            for (int i = 0; i < 90; i++)
+            {
+                _stars.Add(new Point(random.Next(20, 880), random.Next(70, 490)));
+            }
+            Logger.Instance.Write("Фон уровня загружен через Proxy.");
+        }
+
+        public void Draw(Graphics graphics, Rectangle area)
+        {
+            using (Brush background = new SolidBrush(Color.FromArgb(18, 24, 33)))
+            using (Brush star = new SolidBrush(Color.FromArgb(180, 220, 255)))
+            {
+                graphics.FillRectangle(background, area);
+                for (int i = 0; i < _stars.Count; i++)
+                {
+                    graphics.FillEllipse(star, _stars[i].X, _stars[i].Y, 2, 2);
+                }
+            }
+        }
+    }
+
+    public sealed class BackgroundProxy : IBackground
+    {
+        private RealBackground _background;
+
+        public void Draw(Graphics graphics, Rectangle area)
+        {
+            if (_background == null)
+            {
+                _background = new RealBackground();
+            }
+            _background.Draw(graphics, area);
+        }
+    }
+
+    public sealed class PlayerShip
+    {
+        public PlayerShip(int x, int y)
+        {
+            Bounds = new Rectangle(x, y, 44, 32);
+            Health = 3;
+        }
+
+        public Rectangle Bounds { get; private set; }
+        public int Health { get; private set; }
+        public int Cooldown { get; private set; }
+
+        public void Move(int dx)
+        {
+            Rectangle next = Bounds;
+            next.X += dx;
+            if (next.Left < 18)
+            {
+                next.X = 18;
+            }
+            if (next.Right > 882)
+            {
+                next.X = 882 - next.Width;
+            }
+            Bounds = next;
+        }
+
+        public Bullet TryShoot()
+        {
+            if (Cooldown > 0)
+            {
+                return null;
+            }
+
+            Cooldown = 10;
+            return new Bullet(Bounds.Left + Bounds.Width / 2 - 3, Bounds.Top - 14);
+        }
+
+        public void Update()
+        {
+            if (Cooldown > 0)
+            {
+                Cooldown--;
+            }
+        }
+
+        public void Damage()
+        {
+            Health--;
+        }
+
+        public void Draw(Graphics graphics)
+        {
+            using (Brush body = new SolidBrush(Color.FromArgb(95, 185, 255)))
+            using (Brush core = new SolidBrush(Color.White))
+            {
+                Point[] ship =
+                {
+                    new Point(Bounds.Left + Bounds.Width / 2, Bounds.Top),
+                    new Point(Bounds.Left, Bounds.Bottom),
+                    new Point(Bounds.Right, Bounds.Bottom)
+                };
+                graphics.FillPolygon(body, ship);
+                graphics.FillEllipse(core, Bounds.Left + 16, Bounds.Top + 13, 12, 12);
+            }
+        }
+    }
+
+    public sealed class Bullet
+    {
+        public Bullet(int x, int y)
+        {
+            Bounds = new Rectangle(x, y, 6, 16);
+            IsActive = true;
+        }
+
+        public Rectangle Bounds { get; private set; }
+        public bool IsActive { get; private set; }
+
+        public void Update()
+        {
+            Rectangle next = Bounds;
+            next.Y -= 12;
+            Bounds = next;
+            if (Bounds.Bottom < 70)
+            {
+                IsActive = false;
+            }
+        }
+
+        public void Deactivate()
+        {
+            IsActive = false;
+        }
+
+        public void Draw(Graphics graphics)
+        {
+            if (!IsActive)
+            {
+                return;
+            }
+
+            using (Brush brush = new SolidBrush(Color.FromArgb(160, 255, 180)))
+            {
+                graphics.FillRectangle(brush, Bounds);
+            }
+        }
+    }
+
+    // Interpreter: клавиши переводятся в команды игрового мира.
+    public sealed class CommandInterpreter
+    {
+        public void Interpret(HashSet<Keys> keys, GameWorld world)
+        {
+            if (keys.Contains(Keys.Left) || keys.Contains(Keys.A))
+            {
+                new MoveCommand(-7).Execute(world);
+            }
+            if (keys.Contains(Keys.Right) || keys.Contains(Keys.D))
+            {
+                new MoveCommand(7).Execute(world);
+            }
+            if (keys.Contains(Keys.Space))
+            {
+                new ShootCommand().Execute(world);
+            }
+        }
+    }
+
+    public interface IGameCommand
+    {
+        void Execute(GameWorld world);
+    }
+
+    public sealed class MoveCommand : IGameCommand
+    {
+        private readonly int _dx;
+
+        public MoveCommand(int dx)
+        {
+            _dx = dx;
+        }
+
+        public void Execute(GameWorld world)
+        {
+            world.MovePlayer(_dx);
+        }
+    }
+
+    public sealed class ShootCommand : IGameCommand
+    {
+        public void Execute(GameWorld world)
+        {
+            world.PlayerShoot();
+        }
+    }
+
+    public sealed class GameWorld
+    {
+        private readonly EventBus _events;
+        private readonly IFactionFactory _factory = new SpaceFactionFactory();
+        private readonly WaveDirector _director = new WaveDirector();
+        private PlayerShip _player;
+        private Fleet _fleet;
+        private readonly IBackground _background;
+        private readonly List<Bullet> _bullets = new List<Bullet>();
+        private bool _gameOver;
+
+        public GameWorld(PlayerShip player, Fleet fleet, IBackground background, EventBus events)
+        {
+            _player = player;
+            _fleet = fleet;
+            _background = background;
+            _events = events;
+        }
+
+        public int Score { get; private set; }
+
+        public string StatusText
+        {
+            get
+            {
+                if (_gameOver && _player.Health <= 0)
+                {
+                    return "Поражение. Налетчики прорвались. Очки: " + Score + ". R - рестарт.";
+                }
+                if (_gameOver)
+                {
+                    return "Победа. Вся волна уничтожена. Очки: " + Score + ". R - рестарт.";
+                }
+                return "HP: " + _player.Health + " | Очки: " + Score + " | Враги: " + AliveEnemies().Count;
+            }
+        }
+
+        public void MovePlayer(int dx)
+        {
+            if (!_gameOver)
+            {
+                _player.Move(dx);
+            }
+        }
+
+        public void PlayerShoot()
+        {
+            if (_gameOver)
+            {
+                return;
+            }
+
+            Bullet bullet = _player.TryShoot();
+            if (bullet != null)
+            {
+                _bullets.Add(bullet);
+            }
+        }
+
+        public void Update()
+        {
+            if (_gameOver)
+            {
+                return;
+            }
+
+            _player.Update();
+            _fleet.Update();
+
+            for (int i = _bullets.Count - 1; i >= 0; i--)
+            {
+                _bullets[i].Update();
+                if (!_bullets[i].IsActive)
+                {
+                    _bullets.RemoveAt(i);
                 }
             }
 
-            if (healer == null)
+            ResolveHits();
+            ResolveEnemyPressure();
+
+            if (!_fleet.IsAlive)
             {
-                Events.Notify(new GameEvent("error", "В армии нет живого лекаря."));
-                return;
+                _gameOver = true;
+                _events.Notify(new GameEvent("finish", "Победа: вся вражеская волна уничтожена."));
+            }
+        }
+
+        public void Draw(Graphics graphics)
+        {
+            _background.Draw(graphics, new Rectangle(0, 0, 900, 500));
+
+            using (Pen line = new Pen(Color.FromArgb(70, 100, 130)))
+            {
+                graphics.DrawLine(line, 0, 486, 900, 486);
             }
 
-            Unit target = units[targetIndex];
-            healer.Heal(target);
-            Events.Notify(new GameEvent("heal", healer.Name + " лечит " + target.Name + "."));
-            EnemyTurn();
-            CheckVictory();
-        }
-
-        public void EndBattle()
-        {
-            BattleEnded = true;
-            Events.Notify(new GameEvent("end", "Бой завершен по команде игрока."));
-        }
-
-        private bool CheckIndex(List<Unit> units, int index, string role)
-        {
-            if (index < 0 || index >= units.Count)
+            _fleet.Draw(graphics);
+            for (int i = 0; i < _bullets.Count; i++)
             {
-                Events.Notify(new GameEvent("error", "Неверный номер " + role + ": " + index));
-                return false;
+                _bullets[i].Draw(graphics);
             }
-            return true;
+            _player.Draw(graphics);
         }
 
-        private void EnemyTurn()
+        public void Restart()
         {
-            Unit enemy = FirstAlive(EnemyArmy.Units());
-            Unit player = FirstAlive(PlayerArmy.Units());
-            if (enemy == null || player == null)
-            {
-                return;
-            }
-
-            player.TakeDamage(enemy.Attack);
-            Events.Notify(new GameEvent("attack", "Ответный ход: " + enemy.Name + " атакует " + player.Name + "."));
+            _player = _factory.CreatePlayer();
+            _fleet = _director.CreateFirstWave(_factory);
+            _bullets.Clear();
+            Score = 0;
+            _gameOver = false;
+            _events.Notify(new GameEvent("restart", "Игра перезапущена."));
         }
 
-        private static Unit FirstAlive(List<Unit> units)
+        private void ResolveHits()
         {
-            for (int i = 0; i < units.Count; i++)
+            List<EnemyShip> enemies = AliveEnemies();
+            for (int b = _bullets.Count - 1; b >= 0; b--)
             {
-                if (units[i].IsAlive)
+                Bullet bullet = _bullets[b];
+                for (int e = 0; e < enemies.Count; e++)
                 {
-                    return units[i];
+                    EnemyShip enemy = enemies[e];
+                    if (bullet.Bounds.IntersectsWith(enemy.Bounds))
+                    {
+                        enemy.Destroy();
+                        bullet.Deactivate();
+                        Score += enemy.Score;
+                        _events.Notify(new GameEvent("hit", "Попадание: уничтожен " + enemy.Name + ". +" + enemy.Score + " очков."));
+                        break;
+                    }
                 }
             }
-            return null;
         }
 
-        private void CheckVictory()
+        private void ResolveEnemyPressure()
         {
-            if (!PlayerArmy.IsAlive || !EnemyArmy.IsAlive)
+            List<EnemyShip> enemies = AliveEnemies();
+            for (int i = 0; i < enemies.Count; i++)
             {
-                BattleEnded = true;
-                string winner = PlayerArmy.IsAlive ? PlayerArmy.Name : EnemyArmy.Name;
-                Events.Notify(new GameEvent("finish", "Победитель: " + winner));
+                EnemyShip enemy = enemies[i];
+                if (enemy.Bounds.Bottom >= _player.Bounds.Top || enemy.Bounds.IntersectsWith(_player.Bounds))
+                {
+                    enemy.Destroy();
+                    _player.Damage();
+                    _events.Notify(new GameEvent("damage", "Корабль получил урон. Осталось HP: " + _player.Health + "."));
+                    if (_player.Health <= 0)
+                    {
+                        _gameOver = true;
+                        _events.Notify(new GameEvent("finish", "Поражение: корабль игрока уничтожен."));
+                    }
+                    return;
+                }
             }
+        }
+
+        private List<EnemyShip> AliveEnemies()
+        {
+            List<EnemyShip> enemies = new List<EnemyShip>();
+            _fleet.Collect(enemies);
+            return enemies;
         }
     }
 }

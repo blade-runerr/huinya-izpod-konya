@@ -2,122 +2,116 @@
 
 ## Тема
 
-Разработка работающей игры на статически типизированном языке программирования с применением паттернов проектирования, изученных в лабораторных работах 1-6.
+Разработка работающей игры на статически типизированном языке программирования с применением паттернов проектирования из лабораторных работ 1-6.
 
 ## Цель работы
 
-Разработать пошаговую стратегию на C#, применив несколько паттернов проектирования в комплексе, подготовить UML-диаграммы классов и последовательности, а также распределить работы между участниками команды.
+Разработать активную оконную игру на C# WinForms, применив несколько паттернов проектирования в комплексе, подготовить UML-диаграммы классов и последовательности, а также распределить работу между участниками команды.
 
 ## Выбранная игра
 
-Разработана оконная пошаговая стратегия `Pattern Quest` на WinForms.
+Разработана аркадная стрелялка `Pattern Quest Shooter`.
 
-Игрок управляет армией фракции `Орден Севера` и сражается с армией `Налетчики Пустоши`. Армии состоят из отрядов: авангард, дальний ряд, поддержка. Игрок использует кнопки окна, а внутри программы эти действия преобразуются в команды мини-языка:
+Игрок управляет синим кораблем в нижней части окна. Враги появляются сверху, двигаются по экрану и постепенно опускаются вниз. Игрок двигается клавишами `A/D` или стрелками и стреляет клавишей `Space`.
 
-- `scout` - разведка карты;
-- `attack <номер_своего> <номер_врага>` - атака;
-- `heal <номер_своего>` - лечение союзника;
-- `end` - завершение боя.
+Победа наступает, когда уничтожена вся волна врагов. Поражение наступает, если здоровье игрока становится равно 0.
 
 Исходный код расположен в файле [Program.cs](C:/Users/roman/pin12-VM/Dev/game/PatternQuest/Program.cs).
+
+## Управление
+
+- `A` или стрелка влево - движение влево.
+- `D` или стрелка вправо - движение вправо.
+- `Space` - выстрел.
+- `R` - рестарт после победы или поражения.
 
 ## Примененные паттерны из лабораторных работ 1-6
 
 | ЛР | Паттерн | Реализация в проекте |
 | --- | --- | --- |
 | 1 | Singleton | `Logger` - единый журнал игровых сообщений. |
-| 1 | Abstract Factory | `IFactionFactory`, `OrderFactory`, `RaidersFactory` создают совместимые семейства юнитов и карту фракции. |
-| 2 | Builder | `ArmyBuilder` и `ArmyDirector` собирают армию из отрядов. |
-| 3 | Composite | `IArmyComponent`, `Unit`, `Squad` позволяют одинаково работать с отдельным юнитом и составным отрядом. |
-| 4 | Proxy | `MapProxy` откладывает создание `RealMapImage` до команды разведки. |
-| 5 | Interpreter | `CommandParser` и выражения `AttackExpression`, `HealExpression`, `ScoutExpression`, `EndExpression` интерпретируют команды игрока. |
-| 6 | Observer | `EventBus`, `BattleJournal`, `ScoreBoard` получают уведомления о ходе боя. |
+| 1 | Abstract Factory | `IFactionFactory`, `SpaceFactionFactory` создают корабль игрока, врагов и фон одной игровой темы. |
+| 2 | Builder | `WaveBuilder` и `WaveDirector` собирают волну врагов из нескольких линий. |
+| 3 | Composite | `IEnemyComponent`, `EnemyShip`, `Fleet` позволяют одинаково работать с отдельным врагом и составной волной. |
+| 4 | Proxy | `BackgroundProxy` откладывает создание тяжелого звездного фона до первого рисования. |
+| 5 | Interpreter | `CommandInterpreter`, `MoveCommand`, `ShootCommand` интерпретируют нажатые клавиши как команды игрового мира. |
+| 6 | Observer | `EventBus`, `ShooterForm`, `ScoreObserver` получают уведомления о попаданиях, победе, поражении и рестарте. |
 
 ## Диаграмма классов
 
 ```mermaid
 classDiagram
     class Logger {
-        -Logger instance
         +Instance Logger
         +Write(message)
     }
 
     class IFactionFactory {
         <<interface>>
-        +FactionName
-        +CreateInfantry() Unit
-        +CreateArcher() Unit
-        +CreateSupport() Unit
-        +CreateMap() IMapImage
+        +CreatePlayer() PlayerShip
+        +CreateScout(x, y) EnemyShip
+        +CreateRaider(x, y) EnemyShip
+        +CreateBackground() IBackground
     }
-    class OrderFactory
-    class RaidersFactory
-    IFactionFactory <|.. OrderFactory
-    IFactionFactory <|.. RaidersFactory
+    class SpaceFactionFactory
+    IFactionFactory <|.. SpaceFactionFactory
 
-    class IArmyComponent {
+    class WaveBuilder {
+        +AddScoutLine()
+        +AddRaiderLine()
+        +Build() Fleet
+    }
+    class WaveDirector {
+        +CreateFirstWave(factory) Fleet
+    }
+    WaveBuilder --> IFactionFactory
+    WaveDirector --> WaveBuilder
+
+    class IEnemyComponent {
         <<interface>>
-        +Name
-        +Power
         +IsAlive
-        +Print(indent)
+        +Update()
+        +Draw(graphics)
+        +Collect(enemies)
     }
-    class Unit {
-        +Health
-        +Attack
-        +Healing
-        +TakeDamage(damage)
-        +Heal(target)
+    class EnemyShip {
+        +Bounds
+        +Score
+        +Destroy()
+        +Update()
+        +Draw(graphics)
     }
-    class Squad {
-        -children
+    class Fleet {
         +Add(component)
-        +Units()
+        +Update()
+        +Draw(graphics)
     }
-    IArmyComponent <|.. Unit
-    IArmyComponent <|.. Squad
-    Squad o-- IArmyComponent
+    IEnemyComponent <|.. EnemyShip
+    IEnemyComponent <|.. Fleet
+    Fleet o-- IEnemyComponent
 
-    class ArmyBuilder {
-        +AddVanguard()
-        +AddRangeLine()
-        +AddSupport()
-        +Build() Squad
-    }
-    class ArmyDirector {
-        +CreateBalancedArmy(factory) Squad
-    }
-    ArmyBuilder --> IFactionFactory
-    ArmyDirector --> ArmyBuilder
-
-    class IMapImage {
+    class IBackground {
         <<interface>>
-        +DrawBox()
-        +Reveal()
+        +Draw(graphics, area)
     }
-    class MapProxy
-    class RealMapImage
-    IMapImage <|.. MapProxy
-    IMapImage <|.. RealMapImage
-    MapProxy --> RealMapImage
+    class BackgroundProxy
+    class RealBackground
+    IBackground <|.. BackgroundProxy
+    IBackground <|.. RealBackground
+    BackgroundProxy --> RealBackground
 
-    class ICommandExpression {
+    class CommandInterpreter {
+        +Interpret(keys, world)
+    }
+    class IGameCommand {
         <<interface>>
-        +Interpret(context)
+        +Execute(world)
     }
-    class CommandParser {
-        +Parse(line) ICommandExpression
-    }
-    class AttackExpression
-    class HealExpression
-    class ScoutExpression
-    class EndExpression
-    ICommandExpression <|.. AttackExpression
-    ICommandExpression <|.. HealExpression
-    ICommandExpression <|.. ScoutExpression
-    ICommandExpression <|.. EndExpression
-    CommandParser --> ICommandExpression
+    class MoveCommand
+    class ShootCommand
+    IGameCommand <|.. MoveCommand
+    IGameCommand <|.. ShootCommand
+    CommandInterpreter --> IGameCommand
 
     class EventBus {
         +Attach(observer)
@@ -127,27 +121,26 @@ classDiagram
         <<interface>>
         +Update(event)
     }
-    class BattleJournal
-    class ScoreBoard
-    IGameObserver <|.. BattleJournal
-    IGameObserver <|.. ScoreBoard
+    class ShooterForm
+    class ScoreObserver
+    IGameObserver <|.. ShooterForm
+    IGameObserver <|.. ScoreObserver
     EventBus --> IGameObserver
 
-    class GameContext {
-        +Attack(attackerIndex, targetIndex)
-        +Heal(targetIndex)
-        +Scout()
-        +EndBattle()
+    class GameWorld {
+        +MovePlayer(dx)
+        +PlayerShoot()
+        +Update()
+        +Draw(graphics)
+        +Restart()
     }
-    class Game {
-        +CreateDemo()
-        +RunScript(commands)
-        +RunInteractive()
-    }
-    Game --> GameContext
-    GameContext --> Squad
-    GameContext --> IMapImage
-    GameContext --> EventBus
+    class PlayerShip
+    class Bullet
+    GameWorld --> PlayerShip
+    GameWorld --> Fleet
+    GameWorld --> Bullet
+    GameWorld --> IBackground
+    GameWorld --> EventBus
 ```
 
 ## Диаграмма последовательности
@@ -155,33 +148,28 @@ classDiagram
 ```mermaid
 sequenceDiagram
     actor Player as Игрок
-    participant Game as Game
-    participant Parser as CommandParser
-    participant Expr as ICommandExpression
-    participant Ctx as GameContext
-    participant Map as MapProxy
+    participant Form as ShooterForm
+    participant Interpreter as CommandInterpreter
+    participant Command as ShootCommand
+    participant World as GameWorld
+    participant Bullet as Bullet
+    participant Enemy as EnemyShip
     participant Bus as EventBus
-    participant Journal as BattleJournal
-    participant Score as ScoreBoard
+    participant Score as ScoreObserver
 
-    Player->>Game: вводит "scout"
-    Game->>Parser: Parse(command)
-    Parser-->>Game: ScoutExpression
-    Game->>Expr: Interpret(context)
-    Expr->>Ctx: Scout()
-    Ctx->>Map: Reveal()
-    Map->>Map: создает RealMapImage при первом вызове
-    Ctx->>Bus: Notify(GameEvent)
-    Bus->>Journal: Update(event)
-    Bus->>Score: Update(event)
-
-    Player->>Game: вводит "attack 0 0"
-    Game->>Parser: Parse(command)
-    Parser-->>Game: AttackExpression
-    Game->>Expr: Interpret(context)
-    Expr->>Ctx: Attack(0, 0)
-    Ctx->>Bus: Notify(attack)
-    Bus->>Journal: Update(event)
+    Player->>Form: нажимает Space
+    Form->>Interpreter: Interpret(keys, world)
+    Interpreter->>Command: Execute(world)
+    Command->>World: PlayerShoot()
+    World->>Bullet: создает пулю
+    loop каждый тик таймера
+        Form->>World: Update()
+        World->>Bullet: Update()
+        World->>Enemy: проверка столкновения
+    end
+    World->>Enemy: Destroy()
+    World->>Bus: Notify(hit)
+    Bus->>Form: Update(event)
     Bus->>Score: Update(event)
 ```
 
@@ -189,40 +177,42 @@ sequenceDiagram
 
 | Участник | Роль | Что выполнял |
 | --- | --- | --- |
-| Рома | Архитектор и аналитик | Изучил задания лабораторных 1-8, выбрал жанр пошаговой стратегии, описал игровые сущности, распределил паттерны по зонам ответственности, подготовил UML-диаграмму классов. |
-| Люда | Разработчик игровой логики | Реализовала C#-код игры: создание фракций, сборку армий, составные отряды, расчет атаки и лечения, обработку победы и демонстрационный сценарий. |
-| Снежана | Разработчик интерфейса и тестировщик | Реализовала интерпретатор команд игрока, журнал событий, счетчик действий, проверила запуск игры, подготовила результат выполнения и оформила отчет. |
+| Рома | Архитектор и аналитик | Изучил задания лабораторных 1-8, выбрал жанр активной стрелялки, распределил паттерны по зонам ответственности, подготовил UML-диаграмму классов. |
+| Люда | Разработчик игровой логики | Реализовала C#-код игрового мира: движение игрока, выстрелы, врагов, столкновения, очки, победу и поражение. |
+| Снежана | Разработчик интерфейса и тестировщик | Реализовала WinForms-окно, обработку клавиш, журнал событий, статус игры, проверила запуск и оформила отчет. |
 
 ## Результат выполнения программы
 
-Команда сборки оконной версии на текущей машине:
+Команда сборки на текущей машине:
 
 ```powershell
-C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /r:System.Windows.Forms.dll /r:System.Drawing.dll /out:PatternQuest\PatternQuestWin.exe PatternQuest\Program.cs
+C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /r:System.Windows.Forms.dll /r:System.Drawing.dll /out:PatternQuest\PatternShooter.exe PatternQuest\Program.cs
 ```
 
 Команда запуска:
 
 ```powershell
-.\PatternQuest\PatternQuestWin.exe
+.\PatternQuest\PatternShooter.exe
 ```
 
-Результат работы: открывается модальное окно `Pattern Quest - лабораторные 7-8` с двумя списками армий, полем состояния карты, кнопками `Разведка`, `Атаковать`, `Лечить`, `Завершить бой` и журналом событий.
+В Git Bash:
+
+```bash
+./PatternQuest/PatternShooter.exe
+```
+
+Результат работы: открывается окно `Pattern Quest Shooter - лабораторные 7-8` с игровым полем, кораблем игрока, движущимися врагами, счетом, HP и журналом событий.
 
 Фрагмент журнала:
 
 ```text
-[LOG] Загрузка реальной карты snow-pass.map
-Разведка открыла карту и позиции противника.
-> attack 0 0
-Страж атакует Берсерк на 8 урона.
-Ответный ход: Берсерк атакует Страж.
-> heal 2
-Целитель лечит Арбалетчик.
-> end
-Бой завершен по команде игрока.
+[LOG] Стрелялка запущена. Управление: A/D или стрелки, Space - выстрел, R - рестарт.
+[LOG] Фон уровня загружен через Proxy.
+Попадание: уничтожен Разведчик. +10 очков.
+[LOG] Попаданий за игру: 1
+Победа: вся вражеская волна уничтожена.
 ```
 
 ## Вывод
 
-В ходе лабораторных работ 7-8 была разработана работающая оконная пошаговая стратегия на C#. В проекте применены паттерны из лабораторных работ 1-6: Singleton, Abstract Factory, Builder, Composite, Proxy, Interpreter и Observer. Использование паттернов позволило разделить создание объектов, сборку армии, структуру отрядов, обработку команд, ленивую загрузку карты и рассылку игровых событий.
+В ходе лабораторных работ 7-8 была разработана работающая оконная аркадная стрелялка на C#. В проекте применены паттерны Singleton, Abstract Factory, Builder, Composite, Proxy, Interpreter и Observer. Паттерны позволили разделить создание объектов, сборку волны, структуру врагов, обработку клавиш, ленивую загрузку фона и рассылку игровых событий.
